@@ -1,0 +1,4 @@
+export STRIP=strip
+export CC=gcc
+export CFLAGS="-Wall -O3 -fpic -shared -funroll-loops -ffast-math -fomit-frame-pointer "
+#export LDFLAGS=""
