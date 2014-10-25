@@ -24,7 +24,7 @@
 
 -define(SERVER, ?MODULE).
 
--export([open/1, close/1, set_period/2, set_width/2, set_mode/2, start/1, stop/1]).
+-export([open/1, close/1, set_period/2, set_width/2, set_mode/2, start/1, stop/1, event_wait/1]).
 
 -define(CMD_OPEN,       1).
 -define(CMD_CLOSE,      2).
@@ -41,6 +41,7 @@
 -define(BFIN_SIMPLE_TIMER_MODE_PWM_ONESHOT_HIGH,       4).
 -define(BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT_HIGH,       5).
 -define(BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT_NOIRQ_HIGH, 6).
+-define(BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT_OUT_DIS,    7).
 
 %%%===================================================================
 %%% API
@@ -79,6 +80,15 @@ stop(Device) ->
     Args = <<Device:32/unsigned-little-integer>>,
     call_port(?CMD_STOP, Args).
 
+event_wait(Device) ->
+    bfin_timer_port ! {event_wait, self(), Device},
+    receive
+	{event, Device} ->
+	    ok
+	    %% Unknown ->
+	    %%     {error, Unknown}
+    end.
+
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
@@ -88,6 +98,8 @@ encode_mode(pwm_oneshot) ->
     ?BFIN_SIMPLE_TIMER_MODE_PWM_ONESHOT;
 encode_mode(pwm_cont) ->
     ?BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT;
+encode_mode(pwm_cont_out_dis) ->
+    ?BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT_OUT_DIS;
 encode_mode(capture_mode) ->
     ?BFIN_SIMPLE_TIMER_MODE_WDTH_CAP;
 encode_mode(pwm_noirq) ->
@@ -137,38 +149,55 @@ call_port(Cmd, Data) ->
 
 load_driver() ->
     %% case erl_ddll:load_driver(code:priv_dir("bfin_timer"), "bfin_timer") of
-    case erl_ddll:load_driver(".", "timer") of
+    case erl_ddll:load_driver(".", "bfin_timer") of
 	ok -> ok; 
 	{error, already_loaded} -> ok;
 	Reason -> exit({error, could_not_load_driver, Reason})
     end.
 
 init() ->
-    Port = erlang:open_port({spawn_driver, "timer"},[binary]),
     true = erlang:register(bfin_timer_port, self()),
     ok = load_driver(),
-    loop(Port).
+    Port = erlang:open_port({spawn_driver, "bfin_timer"},[binary]),
+    loop(Port, []).
+
+%%
+%% Iterate through event waiter list and send the event to any waiting
+%% process which is interested in events from this
+%% device. Uninterested waiters are placed back on the pending list to
+%% continue waiting.
+%%
+signal_waiters(_Device, [], PendingList) ->
+    %% done with potential waiters for this event
+    PendingList;
+signal_waiters(Device, [{WaiterDevice, WaiterPid}|WaiterList], PendingList) when WaiterDevice == Device ->
+    %% Signal waiter for this event
+    WaiterPid ! {event, Device},
+    signal_waiters(Device, WaiterList, PendingList);
+signal_waiters(Device, [PendingWaiter|WaiterList], PendingList) ->
+    %% Waiter not interested in this event, put back on pending list
+    signal_waiters(Device, WaiterList, [PendingWaiter|PendingList]).
 
 %% TODO: add command to add caller to wait list for a timer's events. When event
 %% 
 %% The timer driver port process loop
-loop(Port) ->
+loop(Port, EventWaiters) ->
     receive
         {call, Caller, Cmd, Data} ->
 	    Result = call(Port, Cmd, Data),
-	    Caller ! {bfin_timer_port, Result};
+	    Caller ! {bfin_timer_port, Result},
+	    loop(Port, EventWaiters);
 	{Port, EventData} ->
 	    %% handle timer events
 	    case EventData of
-		[255|<<E/binary>>] ->
+		{data, [255|<<E/binary>>]} ->
 		    exit({error, erlang:binary_to_atom(E, latin1)});
-		[2, Timer|<<Width:32/unsigned-little-integer, 
-			    Period:32/unsigned-little-integer>>] -> 
-		    io:format("~p:~p:~p~n", [Timer, Width, Period])
-		    %%{ok, Width, Period}
+		{data, [2|<<Timer:8/unsigned-little-integer>>]} ->
+		    NewEventWaiters = signal_waiters(Timer, EventWaiters, []),
+		    loop(Port, NewEventWaiters)
 	    end;
+	{event_wait, Caller, Device} ->
+	    loop(Port, [{Device, Caller}|EventWaiters]);
         stop ->
-	    %%ok = call(Port, ?CMD_CLOSE, <<>>),
 	    exit(normal)
-    end,
-    loop(Port).
+    end.
