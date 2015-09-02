@@ -1,29 +1,19 @@
 %%%-------------------------------------------------------------------
-%%% @author Devin Butterfield <dbutter@db>
-%%% @copyright (C) 2014, Devin Butterfield
-%%% @doc
-%%%
+%%% @author Lumenosys <dbutter@lumenosys.com>
+%%% @copyright (C) 2014, Lumenosys
+%%% @doc This Erlang port driver provides access to the timer devices on the
+%%% the Lumenosys Obsidian BMOD board.
 %%% @end
-%%% Created : 11 Aug 2014 by Devin Butterfield <dbutter@db>
+%%% Created : 11 Aug 2014 by Lumenosys <dbutter@lumenosys.com>
 %%%-------------------------------------------------------------------
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% 
-%% Commentary:
-%%
-%% This Erlang port driver provides access to the timer devices on the
-%% the Lumenosys Obsidian Blackfin board.
-%% 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% 
-%% Change Log:
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 -module(bfin_timer).
 
 -export([start_link/0, init/0]).
 
 -define(SERVER, ?MODULE).
 
+%% API
 -export([open/1, close/1, set_period/2, set_width/2, set_mode/2, start/1, stop/1, event_wait/1]).
 
 -define(CMD_OPEN,       1).
@@ -43,42 +33,102 @@
 -define(BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT_NOIRQ_HIGH, 6).
 -define(BFIN_SIMPLE_TIMER_MODE_PWMOUT_CONT_OUT_DIS,    7).
 
+start_link() ->
+    Pid = spawn_link(?SERVER, init, []),
+    {ok, Pid}.
+
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-start_link() ->
-    Pid = spawn_link(?SERVER, init, []),
-    {ok, Pid}.
+%% @doc Open timer device instance specified by integer
+%% @end
+-spec open(Device) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Reason :: term().
 
 open(Device) ->
     Args = <<Device:32/unsigned-little-integer>>,
     call_port(?CMD_OPEN, Args).
 
+%% @doc Close timer device instance specified by integer
+%% @end
+-spec close(Device) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Reason :: term().
+
 close(Device) ->
     Args = <<Device:32/unsigned-little-integer>>,
     call_port(?CMD_CLOSE, Args).
+
+%% @doc Set timer period for device instance specified by integer
+%% @end
+-spec set_period(Device, Period) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Period :: integer(),
+      Reason :: term().
 
 set_period(Device, Period) ->
     Args = <<Device:32/unsigned-little-integer, Period:32/unsigned-little-integer>>,
     call_port(?CMD_SET_PERIOD, Args).
 
+%% @doc Set timer pulse width for device instance specified by integer
+%% @end
+-spec set_width(Device, Width) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Width :: integer(),
+      Reason :: term().
+
 set_width(Device, Width) ->
     Args = <<Device:32/unsigned-little-integer, Width:32/unsigned-little-integer>>,
     call_port(?CMD_SET_WIDTH, Args).
+
+%% @doc Set timer mode for device instance specified by integer
+%% Possible Modes include:
+%% encode_mode(pwm_oneshot) ->
+%%   pwm_cont: PWM continous, active low on pin
+%%   pwm_cont_out_dis: PWM continous, output on pin disabled
+%%   capture_mode: pulse capture mode
+%%   pwm_noirq: pulse oneshot mode, no interrupts, active low on pin
+%%   pwm_oneshot_high: pulse oneshot, active high on pin
+%%   pwm_cont_high: pwm continous, active high on pin
+%%   pwm_cont_noirq_high: pwm continous, no interrupts, active high on pin
+%% @end
+-spec set_mode(Device, Mode) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Mode :: atom(),
+      Reason :: term().
 
 set_mode(Device, Mode) ->
     TimerMode = encode_mode(Mode),
     Args = <<Device:32/unsigned-little-integer, TimerMode:32/unsigned-little-integer>>,
     call_port(?CMD_SET_MODE, Args).
 
+%% @doc Start timer for device instance specified by integer
+%% @end
+-spec start(Device) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Reason :: term().
+
 start(Device) ->
     Args = <<Device:32/unsigned-little-integer>>,
     call_port(?CMD_START, Args).
 
+%% @doc Stop timer for device instance specified by integer
+%% @end
+-spec stop(Device) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Reason :: term().
+
 stop(Device) ->
     Args = <<Device:32/unsigned-little-integer>>,
     call_port(?CMD_STOP, Args).
+
+%% @doc Register caller with driver to receive timer event messages
+%% @end
+-spec event_wait(Device) -> 'ok' | 'error' | {'error_down', Reason} when
+      Device :: integer(),
+      Reason :: term().
 
 event_wait(Device) ->
     bfin_timer_port ! {event_wait, self(), Device},
@@ -121,38 +171,22 @@ call(Port, Cmd, Data) ->
 	    error
     end.
 
-%% handle_event(Port) ->
-%%     receive
-%% 	{Port, {data, RespData}} ->
-%% 	    case RespData of
-%% 		[255|<<E/binary>>] ->
-%% 		    {error, erlang:binary_to_atom(E, latin1)};
-%% 		[2|<<Size:16/unsigned-little-integer>>] -> {ok, Size};
-%% 		[3|<<Data/binary>>] -> Data
-%% 	    end
-%% 	%% Error ->
-%% 	%%     io:format("DEBUGGING: wait_for_completion: unexpected response ~p~n", [Error]),
-%% 	%%     error
-%%     end.
-
 call_port(Cmd, Data) ->
     bfin_timer_port ! {call, self(), Cmd, Data},
     receive
         {bfin_timer_port, Result} ->
             Result;
-	%% If the calling process has setup a monitor on the tunnel,
-	%% this will tell them it exited so they don't hange waiting
-	%% forever!
 	{'DOWN', _Ref, process, _Pid, Reason} ->
+            %% If the calling process has setup a monitor, this will tell
+            %% them it exited so they don't hange waiting forever!
 	    {error_down, Reason}
     end.
 
 load_driver() ->
     case erl_ddll:load_driver(code:priv_dir("bfin_timer"), "bfin_timer") of
-    %%case erl_ddll:load_driver(".", "bfin_timer") of
-	ok -> ok; 
-	{error, already_loaded} -> ok;
-	Reason -> exit({error, could_not_load_driver, Reason})
+        ok -> ok; 
+        {error, already_loaded} -> ok;
+        Reason -> exit({error, could_not_load_driver, Reason})
     end.
 
 init() ->
@@ -161,12 +195,10 @@ init() ->
     Port = erlang:open_port({spawn_driver, "bfin_timer"},[binary]),
     loop(Port, []).
 
-%%
 %% Iterate through event waiter list and send the event to any waiting
 %% process which is interested in events from this
 %% device. Uninterested waiters are placed back on the pending list to
 %% continue waiting.
-%%
 signal_waiters(_Device, [], PendingList) ->
     %% done with potential waiters for this event
     PendingList;
@@ -178,8 +210,6 @@ signal_waiters(Device, [PendingWaiter|WaiterList], PendingList) ->
     %% Waiter not interested in this event, put back on pending list
     signal_waiters(Device, WaiterList, [PendingWaiter|PendingList]).
 
-%% TODO: add command to add caller to wait list for a timer's events. When event
-%% 
 %% The timer driver port process loop
 loop(Port, EventWaiters) ->
     receive
