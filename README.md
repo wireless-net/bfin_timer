@@ -34,8 +34,18 @@ Usage example
 -------------
 
 ```sh
-$ export ERL_LIBS=/path/to/bfin_timer
-$ erl -sname master@local -setcookie lumenosys -boot start_sasl -eval "application:start(bfin_timer)"
+Chan = 0,
+bfin_timer:open(Chan),
+bfin_timer:set_mode(Chan, pwm_cont_high),
+
+%% set the PWM period in clock cycles for 50Hz 
+%% (125000000Hz system clock / 50Hz -> 2500000)
+bfin_timer:set_period(Chan, 2500000),
+
+%% set the PWM width to 1.5ms (servo midpoint position)
+%% 125000000 Hz / (1/0.0015) = 187500
+bfin_timer:set_width(Chan, 187500),
+bfin_timer:start(Chan),
 ```
 
 Copyright and License
