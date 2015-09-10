@@ -33,7 +33,7 @@ $ make all
 Usage example
 -------------
 
-```sh
+```erlang
 Chan = 0,
 bfin_timer:open(Chan),
 bfin_timer:set_mode(Chan, pwm_cont_high),
